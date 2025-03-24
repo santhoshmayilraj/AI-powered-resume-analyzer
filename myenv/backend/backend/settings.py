@@ -17,6 +17,7 @@ import os
 load_dotenv()
 
 from pathlib import Path
+from pymongo import MongoClient
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -139,3 +140,8 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')  # Directory where media files are 
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+MONGO_URL = "mongodb://localhost:27017"
+MONGO_DB_NAME = "resume_checker"
+client = MongoClient(MONGO_URL)
+db = client[MONGO_DB_NAME]
