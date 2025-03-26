@@ -14,30 +14,31 @@ from backend.settings import db
 @api_view(['POST'])
 def signup(request):
     try:
-        data = request.data
+        data = json.loads(request.body)
         name = data.get("name")
         email = data.get("email")
         password = data.get("password")
         confirm_password = data.get("confirm_password")
 
         if not name or not email or not password or not confirm_password:
-            return Response({"error":"All fields are required"},status = 400) #this returns a JSON to frontend / POSTMAN
-        
+            return Response({"error": "All fields are required"}, status=400)
+
         if password != confirm_password:
-            return Response({"error": "Passwords do not match"},status = 400)
-        
+            return Response({"error": "Passwords do not match"}, status=400)
+
         user_collection = db["users"]
 
-        if user_collection.find_one({"email":email}):
-            return Response({"error":"User already ext"},status = 400)
-        
-        hashed_password = bcrypt.hashpw(password.encode(),bcrypt.gensalt())
-        user_collection.insert_one({"name":name,"email":email,"password":hashed_password.decode()})
+        if user_collection.find_one({"email": email}):
+            return Response({"error": "User already exists"}, status=400)
 
-        return Response({"message": "User registered successfully"},status=201)
-    
+        hashed_password = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+        user_collection.insert_one({"name": name, "email": email, "password": hashed_password.decode()})
+
+        return Response({"message": "User registered successfully"}, status=201)
+
     except Exception as e:
-        return Response({"error":str(e)},status=500)
+        print("Signup Error:", str(e))  
+        return Response({"error": str(e)}, status=500)
 
 @api_view(['POST'])
 @parser_classes([MultiPartParser, FormParser])  # Required for file uploads

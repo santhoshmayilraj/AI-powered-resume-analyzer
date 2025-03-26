@@ -32,7 +32,7 @@ SECRET_KEY = 'django-insecure-5!u846aczq1jb2fxiiikqzs&oj=t8i%itubidft+@wd4_ws5s^
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]  
 
 
 # Application definition
@@ -50,6 +50,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # Move this to the top
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -57,7 +58,6 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware'
 ]
 
 ROOT_URLCONF = 'backend.urls'
@@ -110,12 +110,12 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173", 
-]
+
 
 CORS_ALLOW_ALL_ORIGINS = True 
-
+CORS_ALLOW_CREDENTIALS = True  # Allow cookies & authentication headers
+CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+CORS_ALLOW_HEADERS = ["*"]
 # Internationalization
 # https://docs.djangoproject.com/en/5.1/topics/i18n/
 
