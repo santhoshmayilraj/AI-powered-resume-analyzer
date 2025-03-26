@@ -73,24 +73,34 @@ function SignUp() {
     
     setIsLoading(true);
     setMessage({ text: "", type: "" });
-    
-    // Simulate API call
+  
     try {
-      // Replace with actual API call
-      setTimeout(() => {
-        setMessage({
-          text: "Account created successfully! You can now log in.",
-          type: "success"
-        });
-        setIsLoading(false);
-      }, 1500);
-    } catch (error) {
-      setMessage({
-        text: "Error creating account. Please try again.",
-        type: "error"
-      });
+      const response = await fetch("https://127.0.0.1.8000/api/signup",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          name: formData.fullName,
+          email: formData.email,
+          password: formData.password,
+          confirmPassword: formData.confirmPassword
+        })
+    });
+
+    const data = await response.json();
+    if(response.ok)
+    {
+      setMessage({text:"Account created successfully!",type: "success"});
+    }
+    else {
+      setMessage({ text: data.error || "Signup failed.", type: "error" });
+    }
       setIsLoading(false);
     }
+    catch(error)
+    {
+      setMessage({text: "Network error. Please try again later",type:error});
+    }
+    setIsLoading(false);
   };
 
   return (
