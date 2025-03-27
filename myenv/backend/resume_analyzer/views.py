@@ -39,6 +39,35 @@ def signup(request):
     except Exception as e:
         print("Signup Error:", str(e))  
         return Response({"error": str(e)}, status=500)
+# ------------------------------------------- LOGIN API ------------------------------------------------------------
+@csrf_exempt
+@api_view(['POST'])
+def login(request):
+    try:
+        data = json.loads(request.body)
+        email = data.get("email")
+        password = data.get("password")
+
+        if not email or not password:
+            return Response({"error" : "All fields are required"},status = 400)
+        
+        user_collection = db['users']
+        user = user_collection.find_one({"email":email})
+
+        if not user:
+            return Response({"error": "No user exists-register first"},status=404)
+        
+        if not bcrypt.checkpw(password.encode(),user["password"].encode()):
+            return Response({"error": "Incorrect email or password "},status=401)
+        
+        return Response({"message": "Login Successful"},status=200)
+    
+    except Exception as e:
+        print("Login Error:",str(e))
+        return Response({"error": "Internal Server Error"},status=500)      
+
+
+# ---------------------------------------------------------
 
 @api_view(['POST'])
 @parser_classes([MultiPartParser, FormParser])  # Required for file uploads
