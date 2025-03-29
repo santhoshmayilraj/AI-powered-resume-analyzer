@@ -55,21 +55,38 @@ function Login() {
     
     setIsLoading(true);
     setMessage({ text: "", type: "" });
-    
-    // Simulate API call
     try {
-      // Replace with actual API call
-      setTimeout(() => {
+      const response = await fetch("http://127.0.0.1:8000/api/login/",{
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json"
+        },
+        body: JSON.stringify({
+          email:formData.email,
+          password:formData.password
+        })
+      });
+
+      const data = await response.json();
+      if(!response.ok)
+      {
         setMessage({
-          text: "Login successful!",
-          type: "success"
+          text:data.error || "Invalid email or password - please try again",
+          type: "error"
         });
         setIsLoading(false);
-        // Here you would normally redirect the user or update app state
-      }, 1500);
+        return;
+      }
+
+      localStorage.setItem("token",data.token);
+      setMessage({
+        text: "Login successful!",
+        type: "success"
+    });
+    setIsLoading(false);
     } catch (error) {
       setMessage({
-        text: "Invalid email or password. Please try again.",
+        text: error.message||"Network error - Please try again later",
         type: "error"
       });
       setIsLoading(false);
