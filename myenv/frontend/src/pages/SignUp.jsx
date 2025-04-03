@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import "./SignUp.css";
 
 function SignUp() {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
@@ -75,31 +76,65 @@ function SignUp() {
     setMessage({ text: "", type: "" });
   
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/signup/",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
+      const response = await fetch("http://127.0.0.1:8000/api/signup/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           name: formData.fullName,
           email: formData.email,
           password: formData.password,
           confirm_password: formData.confirmPassword
         })
-    });
+      });
 
-    const data = await response.json();
-    if(response.ok)
-    {
-      setMessage({text:"Account created successfully!",type: "success"});
+      const data = await response.json();
+      
+      if (response.ok) {
+        setMessage({
+          text: "Account created successfully! Redirecting to login...",
+          type: "success"
+        });
+        
+        // Reset the form
+        setFormData({
+          fullName: "",
+          email: "",
+          password: "",
+          confirmPassword: "",
+          agreeTerms: false
+        });
+        
+        // Redirect to login page after a short delay
+        setTimeout(() => {
+          navigate("/login");
+        }, 2000);
+      } else {
+        // Handle specific error cases
+        let errorMessage = data.error || "Signup failed.";
+        
+        if (response.status === 400) {
+          if (data.error === "User already exists") {
+            errorMessage = "This email is already registered. Please log in instead.";
+          } else if (data.error.includes("password")) {
+            errorMessage = data.error || "Password requirements not met.";
+          } else if (data.error.includes("email")) {
+            errorMessage = "Please provide a valid email address.";
+          }
+        }
+        
+        setMessage({ 
+          text: errorMessage, 
+          type: "error" 
+        });
+      }
+    } catch (error) {
+      console.error("Signup error:", error);
+      setMessage({
+        text: "Network error. Please try again later",
+        type: "error"  // Fixed the incorrect type:error syntax
+      });
     }
-    else {
-      setMessage({ text: data.error || "Signup failed.", type: "error" });
-    }
-      setIsLoading(false);
-    }
-    catch(error)
-    {
-      setMessage({text: "Network error. Please try again later",type:error});
-    }
+    
     setIsLoading(false);
   };
 
@@ -154,6 +189,7 @@ function SignUp() {
                 className={formErrors.password ? "input-error" : ""}
               />
               {formErrors.password && <p className="error-message">{formErrors.password}</p>}
+              <p className="password-hint">Must be at least 8 characters</p>
             </div>
             
             <div className="form-group">

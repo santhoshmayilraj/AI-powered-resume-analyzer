@@ -1,8 +1,11 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import "./Login.css";
+import { logout } from '../utils/auth';
 
 function Login() {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     email: "",
     password: "",
@@ -20,7 +23,6 @@ function Login() {
       [name]: type === "checkbox" ? checked : value
     });
     
-    // Clear error when field is updated
     if (formErrors[name]) {
       setFormErrors({
         ...formErrors,
@@ -55,40 +57,75 @@ function Login() {
     
     setIsLoading(true);
     setMessage({ text: "", type: "" });
+    
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/login/",{
-        method:"POST",
-        headers:{
-          "Content-Type":"application/json"
+      // Clear any existing sessions before login
+      logout();
+      
+      const response = await fetch("http://127.0.0.1:8000/api/login/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          email:formData.email,
-          password:formData.password
+          email: formData.email,
+          password: formData.password
         })
       });
 
       const data = await response.json();
-      if(!response.ok)
-      {
+      
+      if (!response.ok) {
+        let errorMessage = "Login failed";
+        
+        // Handle specific error codes
+        if (response.status === 404) {
+          errorMessage = "User not found. Please register first.";
+        } else if (response.status === 401) {
+          errorMessage = "Incorrect email or password";
+        } else if (response.status === 400) {
+          errorMessage = data.error || "Invalid input data";
+        } else {
+          errorMessage = data.error || "Server error. Please try again later.";
+        }
+        
         setMessage({
-          text:data.error || "Invalid email or password - please try again",
+          text: errorMessage,
           type: "error"
         });
         setIsLoading(false);
         return;
       }
 
-      localStorage.setItem("token",data.token);
+      // Choose storage based on remember me option
+      const storage = formData.rememberMe ? localStorage : sessionStorage;
+
+      // Save tokens
+      storage.setItem("token", data.access);
+      storage.setItem("refreshToken", data.refresh);
+
+      // Save user information
+      if (data.user) {
+        storage.setItem("user", JSON.stringify(data.user));
+      }
+
       setMessage({
         text: "Login successful!",
         type: "success"
-    });
-    setIsLoading(false);
+      });
+      
+      // Short delay to show the success message
+      setTimeout(() => {
+        setIsLoading(false);
+        navigate("/upload");
+      }, 500);
+      
     } catch (error) {
       setMessage({
-        text: error.message||"Network error - Please try again later",
+        text: "Network error - Please try again later",
         type: "error"
       });
+      console.error("Login error:", error);
       setIsLoading(false);
     }
   };
