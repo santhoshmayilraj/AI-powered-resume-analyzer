@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
 import Navbar from "./components/Navbar"; // Import Navbar
+import ProtectedRoute from "./components/ProtectedRoute"; // Add this import
 import "./App.css";
 
 // Import pages
@@ -16,7 +17,11 @@ function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/about" element={<About />} />
-        <Route path="/upload" element={<UploadResume />} />
+        <Route path="/upload" element={
+          <ProtectedRoute>
+            <UploadResume />
+          </ProtectedRoute>
+        } />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />
       </Routes>

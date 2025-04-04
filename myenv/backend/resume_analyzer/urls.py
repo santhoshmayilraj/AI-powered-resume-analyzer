@@ -1,8 +1,11 @@
 from django.urls import path
-from .views import upload_resume, signup,login
+from . import views
+from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
-    path('upload/', upload_resume, name='upload_resume'),  # Resume Upload API
-    path('api/signup/', signup, name='signup'),  # Signup API
-    path('api/login/',login,name='login'),
+    path('api/signup/', views.signup, name='signup'),
+    path('api/login/', views.login, name='login'),
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/upload-resume/', views.upload_resume, name='upload_resume'),
+    path('api/user-resumes/', views.get_user_resumes, name='user_resumes'),
 ]

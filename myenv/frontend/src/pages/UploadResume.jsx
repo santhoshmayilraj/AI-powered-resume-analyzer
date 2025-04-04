@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { getAuthToken } from "../utils/auth";
 import "./UploadResume.css";
 
 function UploadResume() {
+  const navigate = useNavigate();
   const [file, setFile] = useState(null);
   const [jobDescription, setJobDescription] = useState("");
   const [message, setMessage] = useState({
@@ -9,6 +12,14 @@ function UploadResume() {
     type: ""
   });
   const [isLoading, setIsLoading] = useState(false);
+
+  // Check authentication on component mount
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) {
+      navigate("/login", { state: { from: "/upload", message: "Please login to access this page" } });
+    }
+  }, [navigate]);
 
   const handleFileChange = (event) => {
     setFile(event.target.files[0]);
@@ -32,23 +43,52 @@ function UploadResume() {
 
     setIsLoading(true);
     
-    // Simulate API call
     try {
-      // Replace with your actual API call
-      setTimeout(() => {
-        setMessage({
-          text: "Resume uploaded and analyzed successfully!",
-          type: "success"
-        });
-        setIsLoading(false);
-      }, 2000);
+      const token = getAuthToken();
+      
+      if (!token) {
+        navigate("/login", { state: { from: "/upload", message: "Session expired. Please login again." } });
+        return;
+      }
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('job_description', jobDescription);
+      
+      // Actual API call with authentication
+      const response = await fetch("http://127.0.0.1:8000/api/upload-resume/", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        
+        // Handle authentication errors
+        if (response.status === 401) {
+          navigate("/login", { state: { from: "/upload", message: "Session expired. Please login again." } });
+          return;
+        }
+        
+        throw new Error(errorData.error || "Error uploading resume");
+      }
+      
+      // Remove the unused data variable and directly set success message
+      setMessage({
+        text: "Resume uploaded and analyzed successfully!",
+        type: "success"
+      });
       
     } catch (error) {
       console.error("Upload error:", error);
       setMessage({
-        text: "Error uploading file. Please try again.",
+        text: error.message || "Error uploading file. Please try again.",
         type: "error"
       });
+    } finally {
       setIsLoading(false);
     }
   };

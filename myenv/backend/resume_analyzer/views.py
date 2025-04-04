@@ -1,21 +1,21 @@
 from rest_framework.decorators import api_view, parser_classes, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import ResumeUploadSerializer  # Ensure this exists
+from .serializers import ResumeUploadSerializer
 import bcrypt
 import json
-from django.http import JsonResponse
+import datetime
 from django.views.decorators.csrf import csrf_exempt
-from django.contrib.auth import authenticate
-from backend.settings import db 
+from backend.settings import db
+from .authentication import MongoJWTAuthentication
 
 # ----------------------------- SIGN UP API -----------------------------
 
 @csrf_exempt
 @api_view(['POST'])
-@permission_classes([AllowAny])  # Added this to fix 401 error
+@permission_classes([AllowAny])
 def signup(request):
     try:
         data = json.loads(request.body)
@@ -79,7 +79,7 @@ def login(request):
         if not bcrypt.checkpw(password.encode(), user["password"].encode()):
             return Response({"error": "Incorrect email or password"}, status=401)
         
-        # FIX: Create RefreshToken directly instead of using for_user
+        # Create RefreshToken directly instead of using for_user
         refresh = RefreshToken()
         
         # Add custom claims to identify the user
@@ -99,23 +99,125 @@ def login(request):
         print("Login Error:", str(e))
         return Response({"error": "Internal Server Error"}, status=500)   
 
-# ---------------------------------------------------------
+# ------------------------------------------- UPLOAD RESUME API ------------------------------------------------------------
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # Also adding this here to be consistent
-@parser_classes([MultiPartParser, FormParser])  # Required for file uploads
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser]) 
 def upload_resume(request):
-    print("Received Data:", request.data)  # Debugging: Print received data
-    
-    serializer = ResumeUploadSerializer(data=request.data)
-    
-    if serializer.is_valid():
+    try:
+        # Extract user_id from the MongoDBUser instance
+        user_id = None
+        
+        # Now that we're using MongoDBUser, we can access id directly
+        if hasattr(request.user, 'id'):
+            user_id = request.user.id
+        
+        if not user_id:
+            return Response({"error": "User identification failed. Please login again."}, status=401)
+        
+        print(f"Received resume upload from user: {user_id}")
+        
+        serializer = ResumeUploadSerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response({"error": serializer.errors}, status=400)
+            
         file = serializer.validated_data['file']
         job_description = serializer.validated_data['job_description']
         
-        print("Uploaded File:", file.name)  # Print file name
-        print("Job Description:", job_description)  # Print job description
+        # Check file type
+        allowed_extensions = ['.pdf', '.doc', '.docx']
+        file_extension = '.' + file.name.split('.')[-1].lower()
         
-        return Response({"message": "File received successfully!"}, status=200)
+        if file_extension not in allowed_extensions:
+            return Response({
+                "error": "Invalid file type. Only PDF, DOC, and DOCX files are supported."
+            }, status=400)
+            
+        # Check file size (limit to 5MB)
+        if file.size > 5 * 1024 * 1024:  # 5MB in bytes
+            return Response({
+                "error": "File too large. Maximum file size is 5MB."
+            }, status=400)
+        
+        # Read file content
+        file_content = file.read()
+        
+        # Create resume document
+        resume_data = {
+            'user_id': user_id,
+            'filename': file.name,
+            'content_type': file.content_type,
+            'file_size': file.size,
+            'file_data': file_content,
+            'job_description': job_description,
+            'upload_date': datetime.datetime.now(),
+            'analysis_results': {
+                'status': 'pending',
+                'score': None,
+                'keywords_matched': [],
+                'missing_keywords': [],
+                'recommendations': []
+            }
+        }
+        
+        # Insert into MongoDB
+        resume_collection = db['resumes']
+        result = resume_collection.insert_one(resume_data)
+        
+        # Return success response with the resume ID
+        return Response({
+            "message": "Resume uploaded successfully!",
+            "resume_id": str(result.inserted_id)
+        }, status=200)
+        
+    except Exception as e:
+        print("Resume Upload Error:", str(e))
+        return Response({"error": "Failed to upload resume. Please try again."}, status=500)
 
-    return Response(serializer.errors, status=400)
+# ------------------------------------------- GET USER RESUMES API -------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_user_resumes(request):
+    try:
+        # Extract user_id from token payload
+        user_id = None
+        if hasattr(request, 'auth') and isinstance(request.auth, dict):
+            user_id = request.auth.get('user_id')
+        
+        if not user_id:
+            # Try getting it from the token payload directly
+            if hasattr(request, 'user') and hasattr(request.user, 'user_id'):
+                user_id = request.user.user_id
+                
+        if not user_id:
+            return Response({"error": "User identification failed"}, status=401)
+        
+        # Get resumes for this user
+        resume_collection = db['resumes']
+        user_resumes = list(resume_collection.find(
+            {"user_id": user_id},
+            {"file_data": 0}  # Exclude file data to reduce response size
+        ))
+        
+        # Format response data
+        resumes_data = []
+        for resume in user_resumes:
+            resumes_data.append({
+                "id": str(resume.get('_id')),
+                "filename": resume.get('filename'),
+                "upload_date": resume.get('upload_date').strftime("%Y-%m-%d %H:%M:%S"),
+                "job_description": resume.get('job_description')[:100] + "..." if len(resume.get('job_description', "")) > 100 else resume.get('job_description', ""),
+                "analysis_status": resume.get('analysis_results', {}).get('status', 'pending'),
+                "score": resume.get('analysis_results', {}).get('score')
+            })
+        
+        return Response({
+            "resumes": resumes_data
+        }, status=200)
+        
+    except Exception as e:
+        print("Get Resumes Error:", str(e))
+        return Response({"error": "Failed to retrieve resumes"}, status=500)
