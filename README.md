@@ -1,4 +1,4 @@
-# 🧠 Resume Matcher AI
+# Resume Matcher AI
 
 Hi again!  
 This is **Santhosh**, your friendly neighbourhood coder.  
