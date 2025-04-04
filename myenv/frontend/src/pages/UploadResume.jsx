@@ -12,6 +12,8 @@ function UploadResume() {
     type: ""
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResults, setAnalysisResults] = useState(null);
 
   // Check authentication on component mount
   useEffect(() => {
@@ -24,10 +26,14 @@ function UploadResume() {
   const handleFileChange = (event) => {
     setFile(event.target.files[0]);
     setMessage({ text: "", type: "" });
+    // Reset analysis when a new file is selected
+    setAnalysisResults(null);
   };
 
   const handleJobChange = (event) => {
     setJobDescription(event.target.value);
+    // Reset analysis when job description changes
+    setAnalysisResults(null);
   };
 
   const handleSubmit = async (event) => {
@@ -42,6 +48,7 @@ function UploadResume() {
     }
 
     setIsLoading(true);
+    setMessage({ text: "", type: "" });
     
     try {
       const token = getAuthToken();
@@ -55,8 +62,8 @@ function UploadResume() {
       formData.append('file', file);
       formData.append('job_description', jobDescription);
       
-      // Actual API call with authentication
-      const response = await fetch("http://127.0.0.1:8000/api/upload-resume/", {
+      // Step 1: Upload the resume
+      const uploadResponse = await fetch("http://127.0.0.1:8000/api/upload-resume/", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`
@@ -64,11 +71,11 @@ function UploadResume() {
         body: formData
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json();
         
         // Handle authentication errors
-        if (response.status === 401) {
+        if (uploadResponse.status === 401) {
           navigate("/login", { state: { from: "/upload", message: "Session expired. Please login again." } });
           return;
         }
@@ -76,21 +83,54 @@ function UploadResume() {
         throw new Error(errorData.error || "Error uploading resume");
       }
       
-      // Remove the unused data variable and directly set success message
+      const uploadData = await uploadResponse.json();
+      
       setMessage({
-        text: "Resume uploaded and analyzed successfully!",
+        text: "Resume uploaded successfully! Analyzing now...",
+        type: "success"
+      });
+      
+      // Step 2: Analyze the resume
+      setIsAnalyzing(true);
+      
+      const analysisResponse = await fetch(`http://127.0.0.1:8000/api/analyze-resume/${uploadData.resume_id}/`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json"
+        }
+      });
+      
+      if (!analysisResponse.ok) {
+        const errorData = await analysisResponse.json();
+        throw new Error(errorData.error || "Error analyzing resume");
+      }
+      
+      const analysisData = await analysisResponse.json();
+      setAnalysisResults(analysisData.analysis);
+      
+      setMessage({
+        text: "Resume analyzed successfully!",
         type: "success"
       });
       
     } catch (error) {
-      console.error("Upload error:", error);
+      console.error("Upload/Analysis error:", error);
       setMessage({
-        text: error.message || "Error uploading file. Please try again.",
+        text: error.message || "Error processing your resume. Please try again.",
         type: "error"
       });
     } finally {
       setIsLoading(false);
+      setIsAnalyzing(false);
     }
+  };
+
+  // Helper function to render color based on score
+  const getScoreColor = (score) => {
+    if (score >= 80) return "high-match";
+    if (score >= 60) return "medium-match";
+    return "low-match";
   };
 
   return (
@@ -137,13 +177,72 @@ function UploadResume() {
             
             <button 
               type="submit" 
-              className={`btn btn-block ${isLoading ? "btn-loading" : ""}`}
-              disabled={isLoading}
+              className={`btn btn-block ${isLoading || isAnalyzing ? "btn-loading" : ""}`}
+              disabled={isLoading || isAnalyzing}
             >
-              {isLoading ? "Analyzing..." : "Analyze Resume"}
+              {isLoading ? "Uploading..." : isAnalyzing ? "Analyzing..." : "Analyze Resume"}
             </button>
           </form>
         </div>
+        
+        {/* Analysis Results Section */}
+        {analysisResults && (
+          <div className="analysis-results">
+            <h2>Analysis Results</h2>
+            
+            <div className="score-container">
+              <div className={`score-circle ${getScoreColor(analysisResults.match_score)}`}>
+                <span className="score-value">{analysisResults.match_score}</span>
+                <span className="score-label">Match Score</span>
+              </div>
+            </div>
+            
+            <div className="analysis-sections">
+              <div className="analysis-section">
+                <h3>Keywords Matched</h3>
+                <div className="keywords-list">
+                  {analysisResults.keywords_matched.length > 0 ? (
+                    <ul>
+                      {analysisResults.keywords_matched.map((keyword, index) => (
+                        <li key={index} className="keyword matched">{keyword}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="no-items">No keywords matched</p>
+                  )}
+                </div>
+              </div>
+              
+              <div className="analysis-section">
+                <h3>Missing Keywords</h3>
+                <div className="keywords-list">
+                  {analysisResults.missing_keywords.length > 0 ? (
+                    <ul>
+                      {analysisResults.missing_keywords.map((keyword, index) => (
+                        <li key={index} className="keyword missing">{keyword}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="no-items">No missing keywords</p>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="analysis-section recommendations">
+              <h3>Recommendations</h3>
+              {analysisResults.recommendations.length > 0 ? (
+                <ul>
+                  {analysisResults.recommendations.map((recommendation, index) => (
+                    <li key={index} className="recommendation">{recommendation}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="no-items">No recommendations provided</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

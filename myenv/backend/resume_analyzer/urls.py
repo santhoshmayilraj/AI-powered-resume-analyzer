@@ -8,4 +8,5 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/upload-resume/', views.upload_resume, name='upload_resume'),
     path('api/user-resumes/', views.get_user_resumes, name='user_resumes'),
+    path('api/analyze-resume/<str:resume_id>/', views.analyze_resume, name='analyze_resume'),  # New endpoint
 ]

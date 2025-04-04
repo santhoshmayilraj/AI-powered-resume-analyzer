@@ -2,6 +2,7 @@ from rest_framework.decorators import api_view, parser_classes, permission_class
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
+from bson.objectid import ObjectId
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import ResumeUploadSerializer
 import bcrypt
@@ -10,6 +11,13 @@ import datetime
 from django.views.decorators.csrf import csrf_exempt
 from backend.settings import db
 from .authentication import MongoJWTAuthentication
+import requests
+import os
+from PyPDF2 import PdfReader
+import docx
+import io
+from dotenv import load_dotenv
+load_dotenv()
 
 # ----------------------------- SIGN UP API -----------------------------
 
@@ -221,3 +229,248 @@ def get_user_resumes(request):
     except Exception as e:
         print("Get Resumes Error:", str(e))
         return Response({"error": "Failed to retrieve resumes"}, status=500)
+
+# ------------------------------------------- ANALYZE RESUME API -------------------------------------------
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def analyze_resume(request, resume_id):
+    try:
+        # Extract user_id from token payload
+        user_id = None
+        if hasattr(request, 'auth') and isinstance(request.auth, dict):
+            user_id = request.auth.get('user_id')
+        
+        if not user_id:
+            # Try getting it from the user object
+            if hasattr(request.user, 'id'):
+                user_id = request.user.id
+                
+        if not user_id:
+            return Response({"error": "User identification failed"}, status=401)
+        
+        # Get the resume from MongoDB
+        resume_collection = db['resumes']
+        resume = resume_collection.find_one({
+            "_id": ObjectId(resume_id),
+            "user_id": user_id  # Security check to ensure the resume belongs to this user
+        })
+        
+        if not resume:
+            return Response({"error": "Resume not found or access denied"}, status=404)
+        
+        # Extract text from resume based on file type
+        resume_text = extract_text_from_resume(resume)
+        job_description = resume.get('job_description', '')
+        
+        if not resume_text:
+            return Response({"error": "Could not extract text from resume"}, status=400)
+        
+        if not job_description:
+            return Response({"error": "Job description is missing"}, status=400)
+        
+        # Call Hugging Face API for analysis
+        analysis_results = analyze_resume_with_huggingface(resume_text, job_description)
+        
+        if not analysis_results:
+            return Response({"error": "Failed to analyze resume. API service may be unavailable."}, status=500)
+        
+        # Update resume document with analysis results
+        resume_collection.update_one(
+            {"_id": ObjectId(resume_id)},
+            {"$set": {
+                "analysis_results": {
+                    "status": "completed",
+                    "score": analysis_results.get("match_score", 0),
+                    "keywords_matched": analysis_results.get("keywords_matched", []),
+                    "missing_keywords": analysis_results.get("missing_keywords", []),
+                    "recommendations": analysis_results.get("recommendations", []),
+                    "analysis_date": datetime.datetime.now()
+                }
+            }}
+        )
+        
+        # Return the analysis results
+        return Response({
+            "message": "Resume analyzed successfully",
+            "analysis": analysis_results
+        }, status=200)
+        
+    except Exception as e:
+        print("Resume Analysis Error:", str(e))
+        return Response({"error": f"Failed to analyze resume: {str(e)}"}, status=500)
+
+# ------------------------------------------- HELPER FUNCTIONS -------------------------------------------
+
+def extract_text_from_resume(resume):
+    """Extract text content from different file formats."""
+    try:
+        file_data = resume.get('file_data')
+        content_type = resume.get('content_type')
+        
+        if not file_data:
+            return None
+        
+        text = ""
+        
+        # PDF files
+        if content_type == 'application/pdf':
+            pdf_file = io.BytesIO(file_data)
+            pdf_reader = PdfReader(pdf_file)
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+                    
+        # DOCX files
+        elif content_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+            docx_file = io.BytesIO(file_data)
+            doc = docx.Document(docx_file)
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+                
+        # DOC files - Note: This is simplified and may not work for all DOC files
+        elif content_type == 'application/msword':
+            # Basic extraction - for better results you might need a converter
+            # Another option is to use textract library or docx2txt
+            text = "Text could not be extracted from DOC format. Please convert to DOCX or PDF."
+            
+        return text
+        
+    except Exception as e:
+        print(f"Text extraction error: {str(e)}")
+        return None
+
+def analyze_resume_with_huggingface(resume_text, job_description):
+    """
+    Send resume and job description to Hugging Face for analysis.
+    
+    You need to:
+    1. Create a Hugging Face account (free)
+    2. Get an API token from https://huggingface.co/settings/tokens
+    3. Set HUGGINGFACE_API_TOKEN as an environment variable
+    """
+    try:
+        # Get API token from environment variable 
+        api_token = os.environ.get('HUGGINGFACE_API_TOKEN')
+        
+        if not api_token:
+            print("HUGGINGFACE_API_TOKEN not found in environment variables")
+            # For development/testing, use a fallback mock response
+            return get_mock_analysis_response(resume_text, job_description)
+        
+        # Prepare the prompt
+        prompt = f"""
+        You are a professional resume analyzer. Given a resume and job description, analyze how well the resume matches the job requirements.
+        
+        Resume:
+        {resume_text}
+        
+        Job Description:
+        {job_description}
+        
+        Provide your analysis in a JSON format with the following structure:
+        {{
+            "match_score": (a number between 0-100 representing overall match percentage),
+            "keywords_matched": (a list of keywords/skills from the job description found in the resume),
+            "missing_keywords": (a list of important keywords/skills from the job description missing in the resume),
+            "recommendations": (a list of 3-5 specific improvement suggestions)
+        }}
+        
+        Respond with ONLY the JSON, no additional text.
+        """
+        
+        # Send request to Hugging Face Inference API
+        # Using a model like google/flan-t5-xxl or mistralai/Mistral-7B-Instruct-v0.1
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
+            headers={
+                "Authorization": f"Bearer {api_token}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 1024,
+                    "temperature": 0.7,
+                    "return_full_text": False
+                }
+            },
+            timeout=30  # Increased timeout for model inference
+        )
+        
+        if response.status_code != 200:
+            print(f"Hugging Face API error: {response.status_code} - {response.text}")
+            return get_mock_analysis_response(resume_text, job_description)
+            
+        result = response.json()
+        
+        # Parse the JSON from the generated text
+        # The response format might vary depending on the model
+        generated_text = result[0].get('generated_text', '')
+        
+        # Extract JSON part from the text (it might be surrounded by markdown or other text)
+        import re
+        json_match = re.search(r'({[\s\S]*})', generated_text)
+        
+        if json_match:
+            try:
+                analysis_json = json.loads(json_match.group(1))
+                return analysis_json
+            except json.JSONDecodeError:
+                print("Failed to parse JSON from response")
+                return get_mock_analysis_response(resume_text, job_description)
+        else:
+            print("No JSON found in response")
+            return get_mock_analysis_response(resume_text, job_description)
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Request error: {str(e)}")
+        return get_mock_analysis_response(resume_text, job_description)
+    except Exception as e:
+        print(f"Analysis error: {str(e)}")
+        return get_mock_analysis_response(resume_text, job_description)
+
+def get_mock_analysis_response(resume_text, job_description):
+    """Provide a fallback response when API is unavailable."""
+    # Extract basic keywords from job description
+    job_keywords = set()
+    for word in job_description.lower().split():
+        if len(word) > 4 and word.isalpha():  # Simple filtering
+            job_keywords.add(word)
+    
+    # Check which keywords are in the resume
+    resume_lower = resume_text.lower()
+    matched_keywords = []
+    missing_keywords = []
+    
+    for keyword in job_keywords:
+        if keyword in resume_lower:
+            matched_keywords.append(keyword)
+        else:
+            missing_keywords.append(keyword)
+    
+    # Calculate a basic match score
+    if len(job_keywords) > 0:
+        match_score = int((len(matched_keywords) / len(job_keywords)) * 100)
+    else:
+        match_score = 0
+    
+    # Limit to top keywords
+    matched_keywords = matched_keywords[:10]
+    missing_keywords = missing_keywords[:10]
+    
+    return {
+        "match_score": match_score,
+        "keywords_matched": matched_keywords,
+        "missing_keywords": missing_keywords,
+        "recommendations": [
+            "Add more specific skills that match the job description",
+            "Quantify your achievements with metrics",
+            "Include relevant certifications or training",
+            "Highlight experience related to the key requirements",
+            "Customize your resume objective to align with the job"
+        ]
+    }
+
+# ------------------------------------------- GET RESUME ANALYSIS
