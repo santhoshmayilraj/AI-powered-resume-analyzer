@@ -16,6 +16,7 @@ import os
 from PyPDF2 import PdfReader
 import docx
 import io
+import re
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -359,70 +360,314 @@ def analyze_resume_with_huggingface(resume_text, job_description):
             # For development/testing, use a fallback mock response
             return get_mock_analysis_response(resume_text, job_description)
         
-        # Prepare the prompt
+        # Prepare the prompt with more detailed instructions for better JSON output
         prompt = f"""
-        You are a professional resume analyzer. Given a resume and job description, analyze how well the resume matches the job requirements.
-        
+        You are a professional resume analyzer and career advisor. Your task is to analyze how well a resume matches a job description.
+
         Resume:
         {resume_text}
-        
+
         Job Description:
         {job_description}
-        
-        Provide your analysis in a JSON format with the following structure:
+
+        Analyze the resume against the job description and provide:
+        1. A match score from 0-100 based on skills, experience, and qualifications
+        2. The top 10 skills or keywords from the job that appear in the resume
+        3. The top 10 important skills or keywords from the job that are missing in the resume
+        4. 5 specific, actionable recommendations to improve the resume (limit each to 80 characters)
+
+        Return ONLY a JSON object with this exact structure:
         {{
-            "match_score": (a number between 0-100 representing overall match percentage),
-            "keywords_matched": (a list of keywords/skills from the job description found in the resume),
-            "missing_keywords": (a list of important keywords/skills from the job description missing in the resume),
-            "recommendations": (a list of 3-5 specific improvement suggestions)
+            "match_score": (number between 0-100),
+            "keywords_matched": ["keyword1", "keyword2", ...],
+            "missing_keywords": ["keyword1", "keyword2", ...],
+            "recommendations": ["recommendation1", "recommendation2", ...]
         }}
-        
-        Respond with ONLY the JSON, no additional text.
+
+        Your response must be VALID JSON only - no explanations, no extra text, no markdown formatting.
+        Be extremely careful with quotes, commas, and brackets to ensure the JSON is correctly formatted.
+        Do not use trailing commas in arrays.
         """
         
-        # Send request to Hugging Face Inference API
-        # Using a model like google/flan-t5-xxl or mistralai/Mistral-7B-Instruct-v0.1
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
-            headers={
-                "Authorization": f"Bearer {api_token}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 1024,
-                    "temperature": 0.7,
-                    "return_full_text": False
-                }
-            },
-            timeout=30  # Increased timeout for model inference
-        )
+        # Try multiple models in sequence for better reliability
+        model_options = [
+            "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "HuggingFaceH4/zephyr-7b-beta", 
+            "microsoft/phi-2",
+            "mistralai/Mistral-7B-Instruct-v0.1",
+            "google/flan-t5-xl"
+        ]
         
-        if response.status_code != 200:
-            print(f"Hugging Face API error: {response.status_code} - {response.text}")
+        response = None
+        for model in model_options:
+            try:
+                print(f"Trying model: {model}")
+                response = requests.post(
+                    f"https://api-inference.huggingface.co/models/{model}",
+                    headers={
+                        "Authorization": f"Bearer {api_token}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "inputs": prompt,
+                        "parameters": {
+                            "max_new_tokens": 1024,
+                            "temperature": 0.7,
+                            "return_full_text": False
+                        }
+                    },
+                    timeout=45  # Extended timeout for model inference
+                )
+                
+                if response.status_code == 200:
+                    print(f"Successful response from model: {model}")
+                    break
+                else:
+                    print(f"Failed with model {model}: {response.status_code} - {response.text}")
+            except Exception as e:
+                print(f"Error with model {model}: {str(e)}")
+                continue
+        
+        if not response or response.status_code != 200:
+            print("All models failed, using fallback analysis")
             return get_mock_analysis_response(resume_text, job_description)
             
         result = response.json()
         
-        # Parse the JSON from the generated text
-        # The response format might vary depending on the model
-        generated_text = result[0].get('generated_text', '')
+        # Parse the response - handle different response formats from different models
+        generated_text = ""
+        if isinstance(result, list) and len(result) > 0:
+            generated_text = result[0].get('generated_text', '')
+        elif isinstance(result, dict):
+            generated_text = result.get('generated_text', '')
         
-        # Extract JSON part from the text (it might be surrounded by markdown or other text)
-        import re
+        # Clean and extract JSON from the text
+        # Look for JSON pattern in the response
         json_match = re.search(r'({[\s\S]*})', generated_text)
         
         if json_match:
             try:
-                analysis_json = json.loads(json_match.group(1))
+                # First try direct parsing
+                json_text = json_match.group(1)
+                try:
+                    analysis_json = json.loads(json_text)
+                except json.JSONDecodeError:
+                    print("Initial JSON parsing failed, attempting to fix JSON format")
+                    
+                    # Fix common JSON formatting errors
+                    # 1. Fix missing commas between items
+                    json_text = re.sub(r'"\s*"', '", "', json_text)
+                    
+                    # 2. Fix trailing commas in arrays
+                    json_text = re.sub(r',\s*]', ']', json_text)
+                    
+                    # 3. Fix missing quotes around keys
+                    json_text = re.sub(r'(\{|\,)\s*([a-zA-Z0-9_]+)\s*:', r'\1 "\2":', json_text)
+                    
+                    # 4. Add missing quotes to string values
+                    json_text = re.sub(r':\s*([a-zA-Z][a-zA-Z0-9_]*)\s*(,|})', r': "\1"\2', json_text)
+                    
+                    print(f"Attempting to parse fixed JSON")
+                    try:
+                        analysis_json = json.loads(json_text)
+                    except json.JSONDecodeError as e:
+                        print(f"Fixed JSON still invalid: {str(e)}")
+                        
+                        # Use regex to extract each component separately
+                        print("Attempting component-by-component extraction")
+                        try:
+                            # Extract match score
+                            match_score_match = re.search(r'"match_score"\s*:\s*(\d+)', json_text)
+                            match_score = int(match_score_match.group(1)) if match_score_match else 0
+                            
+                            # Extract keywords_matched array
+                            keywords_matched = []
+                            matched_array = re.search(r'"keywords_matched"\s*:\s*\[(.*?)\]', json_text, re.DOTALL)
+                            if matched_array:
+                                # Split by commas, handle quoted strings
+                                array_content = matched_array.group(1).strip()
+                                if array_content:
+                                    # Extract all quoted strings
+                                    item_matches = re.findall(r'"([^"]*)"', array_content)
+                                    if item_matches:
+                                        keywords_matched = item_matches
+                                    else:
+                                        # Fallback to simple comma splitting if no quoted strings
+                                        keywords_matched = [k.strip(' "\'') for k in array_content.split(',')]
+                                        keywords_matched = [k for k in keywords_matched if k and len(k) > 1]
+                            
+                            # Extract missing_keywords array
+                            missing_keywords = []
+                            missing_array = re.search(r'"missing_keywords"\s*:\s*\[(.*?)\]', json_text, re.DOTALL) 
+                            if missing_array:
+                                array_content = missing_array.group(1).strip()
+                                if array_content:
+                                    # Extract all quoted strings
+                                    item_matches = re.findall(r'"([^"]*)"', array_content)
+                                    if item_matches:
+                                        missing_keywords = item_matches
+                                    else:
+                                        # Fallback to simple comma splitting
+                                        missing_keywords = [k.strip(' "\'') for k in array_content.split(',')]
+                                        missing_keywords = [k for k in missing_keywords if k and len(k) > 1]
+                            
+                            # Extract recommendations array
+                            recommendations = []
+                            recommendations_array = re.search(r'"recommendations"\s*:\s*\[(.*?)\]', json_text, re.DOTALL)
+                            if recommendations_array:
+                                array_content = recommendations_array.group(1).strip()
+                                if array_content:
+                                    # Extract all quoted strings
+                                    item_matches = re.findall(r'"([^"]*)"', array_content)
+                                    if item_matches:
+                                        recommendations = item_matches
+                                    else:
+                                        # Try to split by commas while preserving meaningful phrases
+                                        recommendations = [k.strip(' "\'') for k in array_content.split(',')]
+                                        recommendations = [k for k in recommendations if k and len(k) > 10]
+                            
+                            # Use fallback recommendations if needed
+                            if not recommendations or len(recommendations) < 3:
+                                recommendations = [
+                                    "Add more specific skills that match the job description",
+                                    "Quantify your achievements with metrics",
+                                    "Include relevant certifications or training",
+                                    "Highlight experience related to the key requirements",
+                                    "Customize your resume objective to align with the job"
+                                ]
+                            
+                            # Construct the analysis JSON
+                            analysis_json = {
+                                "match_score": match_score,
+                                "keywords_matched": keywords_matched[:10],
+                                "missing_keywords": missing_keywords[:10],
+                                "recommendations": recommendations[:5]
+                            }
+                            
+                            print("Successfully extracted components from malformed JSON")
+                            
+                        except Exception as extraction_error:
+                            print(f"Component extraction failed: {str(extraction_error)}")
+                            return get_mock_analysis_response(resume_text, job_description)
+                
+                # Now that we have analysis_json (one way or another), validate its structure
+                required_fields = ["match_score", "keywords_matched", "missing_keywords", "recommendations"]
+                missing_fields = [field for field in required_fields if field not in analysis_json]
+                
+                if missing_fields:
+                    print(f"Missing fields in JSON: {missing_fields}")
+                    return get_mock_analysis_response(resume_text, job_description)
+                
+                # Ensure match_score is a number between 0-100
+                try:
+                    match_score = float(analysis_json["match_score"])
+                    if match_score < 0:
+                        match_score = 0
+                    elif match_score > 100:
+                        match_score = 100
+                    analysis_json["match_score"] = int(match_score)
+                except (ValueError, TypeError):
+                    print("Invalid match_score type")
+                    analysis_json["match_score"] = 0
+                
+                # Ensure keywords_matched and missing_keywords are lists
+                if not isinstance(analysis_json["keywords_matched"], list):
+                    analysis_json["keywords_matched"] = []
+                if not isinstance(analysis_json["missing_keywords"], list):
+                    analysis_json["missing_keywords"] = []
+                if not isinstance(analysis_json["recommendations"], list):
+                    analysis_json["recommendations"] = [
+                        "Add more specific skills that match the job description",
+                        "Quantify your achievements with metrics",
+                        "Include relevant certifications or training",
+                        "Highlight experience related to the key requirements",
+                        "Customize your resume objective to align with the job"
+                    ]
+                
+                # Clean the lists: remove empty items and ensure string types
+                analysis_json["keywords_matched"] = [str(k).strip() for k in analysis_json["keywords_matched"] if k]
+                analysis_json["missing_keywords"] = [str(k).strip() for k in analysis_json["missing_keywords"] if k]
+                analysis_json["recommendations"] = [str(r).strip() for r in analysis_json["recommendations"] if r]
+                
+                # Limit the length of lists
+                analysis_json["keywords_matched"] = analysis_json["keywords_matched"][:10]
+                analysis_json["missing_keywords"] = analysis_json["missing_keywords"][:10]
+                analysis_json["recommendations"] = analysis_json["recommendations"][:5]
+                
+                # Ensure recommendations are not too long
+                analysis_json["recommendations"] = [
+                    rec[:80] for rec in analysis_json["recommendations"]
+                ]
+                
+                # Fill in recommendations if empty
+                if not analysis_json["recommendations"]:
+                    analysis_json["recommendations"] = [
+                        "Add more specific skills that match the job description",
+                        "Quantify your achievements with metrics",
+                        "Include relevant certifications or training",
+                        "Highlight experience related to the key requirements",
+                        "Customize your resume objective to align with the job"
+                    ]
+                
                 return analysis_json
-            except json.JSONDecodeError:
-                print("Failed to parse JSON from response")
+                    
+            except Exception as e:
+                print(f"JSON handling error: {str(e)}")
                 return get_mock_analysis_response(resume_text, job_description)
+            
         else:
             print("No JSON found in response")
-            return get_mock_analysis_response(resume_text, job_description)
+            # Try to extract structured data from unstructured text
+            try:
+                # Look for match score
+                match_score_pattern = r'match(?:\s+)?score(?:\s+)?(?:is|:)?(?:\s+)?(\d+)'
+                match_score_match = re.search(match_score_pattern, generated_text, re.IGNORECASE)
+                match_score = int(match_score_match.group(1)) if match_score_match else 0
+                
+                # Look for matched keywords
+                matched_section = re.search(r'keywords[\s_]+matched:?(.*?)(?:missing|recommendations)', 
+                                           generated_text, re.IGNORECASE | re.DOTALL)
+                matched_keywords = []
+                if matched_section:
+                    matched_text = matched_section.group(1)
+                    matched_keywords = re.findall(r'\b\w+\b', matched_text)
+                    matched_keywords = [k for k in matched_keywords if len(k) > 3][:10]
+                
+                # Look for missing keywords
+                missing_section = re.search(r'missing[\s_]+keywords:?(.*?)(?:recommendations)', 
+                                           generated_text, re.IGNORECASE | re.DOTALL)
+                missing_keywords = []
+                if missing_section:
+                    missing_text = missing_section.group(1)
+                    missing_keywords = re.findall(r'\b\w+\b', missing_text)
+                    missing_keywords = [k for k in missing_keywords if len(k) > 3][:10]
+                
+                # Look for recommendations
+                recommendations = []
+                recommendation_matches = re.findall(r'\d+\.\s+(.*?)(?:\d+\.|$)', 
+                                                  generated_text, re.MULTILINE | re.DOTALL)
+                if recommendation_matches:
+                    recommendations = [r.strip()[:80] for r in recommendation_matches if len(r.strip()) > 10][:5]
+                
+                if len(recommendations) < 3:
+                    recommendations = [
+                        "Add more specific skills that match the job description",
+                        "Quantify your achievements with metrics",
+                        "Include relevant certifications or training",
+                        "Highlight experience related to the key requirements",
+                        "Customize your resume objective to align with the job"
+                    ]
+                
+                return {
+                    "match_score": match_score,
+                    "keywords_matched": matched_keywords,
+                    "missing_keywords": missing_keywords,
+                    "recommendations": recommendations
+                }
+                
+            except Exception as extraction_error:
+                print(f"Extraction error: {str(extraction_error)}")
+                return get_mock_analysis_response(resume_text, job_description)
             
     except requests.exceptions.RequestException as e:
         print(f"Request error: {str(e)}")
@@ -473,4 +718,4 @@ def get_mock_analysis_response(resume_text, job_description):
         ]
     }
 
-# ------------------------------------------- GET RESUME ANALYSIS
+# ------------------------------------------- GET RESUME ANALYSIS API -------------------------------------------
