@@ -14,7 +14,7 @@ Ever updated your resume and thought:
 **“Is this even a good match for the job?”**  
 Yeah, me too. That’s why I built **Resume Matcher AI**—to instantly check how well your resume fits a job description and give you tips to improve it.
 
-### ✅ Features
+### Features
 
 - **Login/Signup** – Secure user accounts (your data matters!).
 - **Resume + Job Description Analysis** – Upload your resume, paste the job description, and let AI work its magic.
