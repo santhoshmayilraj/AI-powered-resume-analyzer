@@ -56,6 +56,8 @@ Clean and minimal UI = smooth user experience.
 Built with love, logic, and a little bit of AI magic 💻✨
 
 📬 Let’s Connect!
+With great code comes great responsibility... this is my gift, my curse. Who am I? Your friendly neighbourhood coder.
+
 📧 Email: santhoshmayilraj@gmail.com
 
 🐙 GitHub: Santhosh M
